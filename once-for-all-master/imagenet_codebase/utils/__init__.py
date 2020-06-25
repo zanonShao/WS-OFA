@@ -13,6 +13,16 @@ except ImportError:
 from utils import *
 from imagenet_codebase.utils.pytorch_utils import *
 
+##############################################
+# Center Loss for Attention Regularization
+##############################################
+class CenterLoss(nn.Module):
+    def __init__(self):
+        super(CenterLoss, self).__init__()
+        self.l2_loss = nn.MSELoss(reduction='sum')
+
+    def forward(self, outputs, targets):
+        return self.l2_loss(outputs, targets) / outputs.size(0)
 
 def get_split_list(in_dim, child_num):
     in_dim_list = [in_dim // child_num] * child_num
@@ -131,3 +141,4 @@ class DistributedTensor(object):
             self.sum = hvd.allreduce(self.sum, name=self.name)
             self.synced = True
         return self.sum / self.count
+

@@ -14,6 +14,7 @@ import torch
 
 from elastic_nn.modules.dynamic_op import DynamicSeparableConv2d
 from elastic_nn.networks.ofa_mbv3 import OFAMobileNetV3
+from elastic_nn.networks.ofa_mbv3_ws import OFAMobileNetV3WS
 from imagenet_codebase.run_manager import DistributedImageNetRunConfig
 from imagenet_codebase.run_manager.distributed_run_manager import DistributedRunManager
 from imagenet_codebase.data_providers.base_provider import MyRandomResizedCrop
@@ -21,7 +22,7 @@ from imagenet_codebase.utils import download_url
 from elastic_nn.training.progressive_shrinking import load_models
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--task', type=str, default='depth', choices=[
+parser.add_argument('--task', type=str, default='kernel', choices=[
     'kernel', 'depth', 'expand',
 ])
 parser.add_argument('--phase', type=int, default=1, choices=[1, 2])
@@ -81,8 +82,8 @@ args.manual_seed = 0
 
 args.lr_schedule_type = 'cosine'
 
-args.base_batch_size = 64
-args.valid_size = 10000
+args.base_batch_size = 32
+args.valid_size = None # split from train_dataset
 
 args.opt_type = 'sgd'
 args.momentum = 0.9
@@ -99,7 +100,7 @@ args.print_frequency = 10
 args.n_worker = 8
 args.resize_scale = 0.08
 args.distort_color = 'tf'
-args.image_size = '128,160,192,224'
+args.image_size = '224' #'128,160,192,224'
 args.continuous_size = True
 args.not_sync_distributed_image_size = False
 
@@ -154,7 +155,7 @@ if __name__ == '__main__':
         args.warmup_lr = args.base_lr
     args.train_batch_size = args.base_batch_size
     args.test_batch_size = args.base_batch_size * 4
-    run_config = DistributedImageNetRunConfig(**args.__dict__, num_replicas=num_gpus, rank=hvd.rank())
+    run_config = DistributedImageNetRunConfig(**args.__dict__, dataset='CUB_200_2011', num_replicas=num_gpus, rank=hvd.rank())
 
     # print run config information
     if hvd.rank() == 0:
@@ -172,19 +173,20 @@ if __name__ == '__main__':
     args.expand_list = [int(e) for e in args.expand_list.split(',')]
     args.depth_list = [int(d) for d in args.depth_list.split(',')]
 
-    net = OFAMobileNetV3(
+    net = OFAMobileNetV3WS(
         n_classes=run_config.data_provider.n_classes, bn_param=(args.bn_momentum, args.bn_eps),
         dropout_rate=args.dropout, base_stage_width=args.base_stage_width, width_mult_list=args.width_mult_list,
         ks_list=args.ks_list, expand_ratio_list=args.expand_list, depth_list=args.depth_list
     )
     # teacher model
+    print("# teacher model")
     if args.kd_ratio > 0:
-        args.teacher_model = OFAMobileNetV3(
+        args.teacher_model = OFAMobileNetV3WS(
             n_classes=run_config.data_provider.n_classes, bn_param=(args.bn_momentum, args.bn_eps),
             dropout_rate=0, width_mult_list=1.0, ks_list=7, expand_ratio_list=6, depth_list=4,
         )
         args.teacher_model.cuda()
-
+    print("# Finish teacher model")
     """ Distributed RunManager """
     # Horovod: (optional) compression algorithm.
     compression = hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
@@ -215,6 +217,7 @@ if __name__ == '__main__':
             load_models(distributed_run_manager, distributed_run_manager.net, model_path=model_path)
             distributed_run_manager.write_log('%.3f\t%.3f\t%.3f\t%s' %
                                               validate(distributed_run_manager, **validate_func_dict), 'valid')
+            print('###############finish manager.validate#############')
         train(distributed_run_manager, args,
               lambda _run_manager, epoch, is_test: validate(_run_manager, epoch, is_test, **validate_func_dict))
     elif args.task == 'depth':

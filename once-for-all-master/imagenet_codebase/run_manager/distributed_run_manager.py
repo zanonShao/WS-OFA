@@ -4,6 +4,7 @@
 
 
 from tqdm import tqdm
+import time
 import json
 
 import torch.backends.cudnn as cudnn
@@ -46,7 +47,8 @@ class DistributedRunManager:
         else:
             self.train_criterion = nn.CrossEntropyLoss()
         self.test_criterion = nn.CrossEntropyLoss()
-        
+        self.center_loss = CenterLoss()
+
         # optimizer
         if self.run_config.no_decay_keys:
             keys = self.run_config.no_decay_keys.split('#')
@@ -61,7 +63,8 @@ class DistributedRunManager:
             self.optimizer, named_parameters=self.net.named_parameters(), compression=hvd_compression,
             backward_passes_per_step=backward_steps,
         )
-
+        self.feature_center = torch.zeros(self.run_config.data_provider.n_classes,
+                                          self.net.M * max(self.net.last_channel)).cuda()
     """ save path and log path """
 
     @property
@@ -182,6 +185,8 @@ class DistributedRunManager:
             else:
                 data_loader = self.run_config.valid_loader
 
+        # print(len(data_loader))
+
         net.eval()
 
         losses = DistributedMetric('val_loss')
@@ -193,9 +198,12 @@ class DistributedRunManager:
                       desc='Validate Epoch #{} {}'.format(epoch + 1, run_str),
                       disable=no_logs or not self.is_root) as t:
                 for i, (images, labels) in enumerate(data_loader):
+                    # print(images.shape)
+                    # print(labels)
+                    # exit(0)
                     images, labels = images.cuda(), labels.cuda()
                     # compute output
-                    output = net(images)
+                    output,_ = net(images)
                     loss = self.test_criterion(output, labels)
                     # measure accuracy and record loss
                     acc1, acc5 = accuracy(output, labels, topk=(1, 5))
@@ -266,7 +274,25 @@ class DistributedRunManager:
                         soft_label = F.softmax(soft_logits, dim=1)
 
                 # compute output
-                output = self.net(images)
+                output,feature_matrix = self.net(images)
+                #
+                # #center loss
+                # # feature_matrix = feature_matrix.reshape((feature_matrix.shape[0], -1))
+                # # feature_center_batch = F.normalize(self.feature_center[labels],dim=-1)
+                # # self.feature_center[labels] += 5e-2 * (feature_matrix.detach() - feature_center_batch)
+                # # center_loss = self.center_loss(feature_matrix,feature_center_batch)
+                #
+                feature_matrix = feature_matrix.reshape((feature_matrix.shape[0], -1))
+                # get this batch's batch_center
+                batch_center = self.feature_center[labels]
+                # Normalize centermatrix batch_center
+                batch_center = nn.functional.normalize(batch_center, 2, -1)
+                # Update Feature Center
+                self.feature_center[labels] += 0.05 * (feature_matrix.detach() - batch_center)
+                # loss_center = l2_loss(feature_matrix, batch_center)
+                distance = torch.pow(feature_matrix - batch_center, 2)
+                distance = torch.sum(distance, -1)
+                center_loss = torch.mean(distance)
 
                 if args.teacher_model is None:
                     loss = self.train_criterion(output, labels)
@@ -279,11 +305,12 @@ class DistributedRunManager:
                     loss = args.kd_ratio * kd_loss + self.train_criterion(output, labels)
                     loss_type = '%.1fkd-%s & ce' % (args.kd_ratio, args.kd_type)
 
+                totoal_loss = loss+center_loss
                 # update
                 self.optimizer.zero_grad()
-                loss.backward()
+                totoal_loss.backward()
                 self.optimizer.step()
-            
+
                 # measure accuracy and record loss
                 acc1, acc5 = accuracy(output, target, topk=(1, 5))
                 losses.update(loss, images.size(0))
@@ -293,7 +320,7 @@ class DistributedRunManager:
                 t.set_postfix({
                     'loss': losses.avg.item(),
                     'top1': top1.avg.item(),
-                    'top5': top5.avg.item(),
+                    'top5': top5.avg    .item(),
                     'img_size': images.size(2),
                     'lr': new_lr,
                     'loss_type': loss_type,
@@ -301,40 +328,42 @@ class DistributedRunManager:
                 })
                 t.update(1)
                 end = time.time()
-    
         return losses.avg.item(), top1.avg.item(), top5.avg.item()
     
     def train(self, args, warmup_epochs=5, warmup_lr=0):
         for epoch in range(self.start_epoch, self.run_config.n_epochs + warmup_epochs):
             train_loss, train_top1, train_top5 = self.train_one_epoch(args, epoch, warmup_epochs, warmup_lr)
-            img_size, val_loss, val_top1, val_top5 = self.validate_all_resolution(epoch, is_test=False)
-        
-            is_best = list_mean(val_top1) > self.best_acc
-            self.best_acc = max(self.best_acc, list_mean(val_top1))
-            if self.is_root:
-                val_log = '[{0}/{1}]\tloss {2:.3f}\ttop-1 acc {3:.3f} ({4:.3f})\ttop-5 acc {5:.3f}\t' \
-                          'Train top-1 {top1:.3f}\tloss {train_loss:.3f}\t'. \
-                    format(epoch + 1 - warmup_epochs, self.run_config.n_epochs, list_mean(val_loss),
-                           list_mean(val_top1), self.best_acc, list_mean(val_top5),
-                           top1=train_top1, train_loss=train_loss)
-                for i_s, v_a in zip(img_size, val_top1):
-                    val_log += '(%d, %.3f), ' % (i_s, v_a)
-                self.write_log(val_log, prefix='valid', should_print=False)
-            
-                self.save_model({
-                    'epoch': epoch,
-                    'best_acc': self.best_acc,
-                    'optimizer': self.optimizer.state_dict(),
-                    'state_dict': self.net.state_dict(),
-                }, is_best=is_best)
+
+            if (epoch + 1) % args.validation_frequency == 0:
+                img_size, val_loss, val_top1, val_top5 = self.validate_all_resolution(epoch, is_test=False)
+                is_best = list_mean(val_top1) > self.best_acc
+                self.best_acc = max(self.best_acc, list_mean(val_top1))
+                if self.is_root:
+                    val_log = '[{0}/{1}]\tloss {2:.3f}\ttop-1 acc {3:.3f} ({4:.3f})\ttop-5 acc {5:.3f}\t' \
+                              'Train top-1 {top1:.3f}\tloss {train_loss:.3f}\t'. \
+                        format(epoch + 1 - warmup_epochs, self.run_config.n_epochs, list_mean(val_loss),
+                               list_mean(val_top1), self.best_acc, list_mean(val_top5),
+                               top1=train_top1, train_loss=train_loss)
+                    for i_s, v_a in zip(img_size, val_top1):
+                        val_log += '(%d, %.3f), ' % (i_s, v_a)
+                    self.write_log(val_log, prefix='valid', should_print=False)
+
+                    self.save_model({
+                        'epoch': epoch,
+                        'best_acc': self.best_acc,
+                        'optimizer': self.optimizer.state_dict(),
+                        'state_dict': self.net.state_dict(),
+                    }, is_best=is_best)
     
     def reset_running_statistics(self, net=None):
         from elastic_nn.utils import set_running_statistics
         if net is None:
             net = self.net
         num_gpu = hvd.size()
-        n_images = 2000
+        n_images = 100
         batch_size = (math.ceil(n_images / num_gpu) // 8 + 1) * 8
+        # print(batch_size)
+        # exit(0)
         n_images = batch_size * num_gpu
         sub_train_loader = self.run_config.random_sub_train_loader(n_images, batch_size,
                                                                    num_replicas=num_gpu, rank=hvd.rank())

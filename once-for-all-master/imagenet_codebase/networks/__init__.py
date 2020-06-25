@@ -4,6 +4,7 @@
 
 from imagenet_codebase.networks.proxyless_nets import ProxylessNASNets, proxyless_base, MobileNetV2
 from imagenet_codebase.networks.mobilenet_v3 import MobileNetV3, MobileNetV3Large
+from imagenet_codebase.networks.mobilenet_v3_ws import MobileNetV3WS
 
 
 def get_net_by_name(name):
@@ -11,5 +12,7 @@ def get_net_by_name(name):
         return ProxylessNASNets
     elif name == MobileNetV3.__name__:
         return MobileNetV3
+    elif name == MobileNetV3WS.__name__:
+        return MobileNetV3WS
     else:
         raise ValueError('unrecognized type of network: %s' % name)
