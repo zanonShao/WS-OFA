@@ -66,6 +66,7 @@ def validate(run_manager, epoch=0, is_test=True, image_size_list=None,
 
         run_manager.reset_running_statistics(dynamic_net)
         loss, top1, top5 = run_manager.validate(epoch=epoch, is_test=is_test, run_str=name, net=dynamic_net)
+        print('#########finish run_manager.validate#########')
         losses_of_subnets.append(loss)
         top1_of_subnets.append(top1)
         top5_of_subnets.append(top5)
@@ -94,6 +95,11 @@ def train_one_epoch(run_manager, args, epoch, warmup_epochs=0, warmup_lr=0):
               disable=not run_manager.is_root) as t:
         end = time.time()
         for i, (images, labels) in enumerate(run_manager.run_config.train_loader):
+            # print(images.shape)
+            # print(labels)
+            # exit(0)
+
+
             data_time.update(time.time() - end)
             if epoch < warmup_epochs:
                 new_lr = run_manager.run_config.warmup_adjust_learning_rate(

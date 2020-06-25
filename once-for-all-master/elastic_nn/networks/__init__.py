@@ -3,4 +3,5 @@
 # International Conference on Learning Representations (ICLR), 2020.
 
 from elastic_nn.networks.ofa_mbv3 import OFAMobileNetV3
+from elastic_nn.networks.ofa_mbv3_ws import OFAMobileNetV3WS
 from elastic_nn.networks.ofa_proxyless import OFAProxylessNASNets
