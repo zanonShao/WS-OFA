@@ -92,14 +92,9 @@ def train_one_epoch(run_manager, args, epoch, warmup_epochs=0, warmup_lr=0):
 
     with tqdm(total=nBatch,
               desc='Train Epoch #{}'.format(epoch + 1),
-              disable=not run_manager.is_root) as t:
+              disable=not run_manager.is_root,dynamic_ncols=True) as t:
         end = time.time()
         for i, (images, labels) in enumerate(run_manager.run_config.train_loader):
-            # print(images.shape)
-            # print(labels)
-            # exit(0)
-
-
             data_time.update(time.time() - end)
             if epoch < warmup_epochs:
                 new_lr = run_manager.run_config.warmup_adjust_learning_rate(
@@ -111,14 +106,16 @@ def train_one_epoch(run_manager, args, epoch, warmup_epochs=0, warmup_lr=0):
                 )
 
             images, labels = images.cuda(), labels.cuda()
+            # print('finish read a img to gpu %d' % hvd.rank())
             target = labels
 
             # soft target
             if args.kd_ratio > 0:
                 args.teacher_model.train()
                 with torch.no_grad():
-                    soft_logits = args.teacher_model(images).detach()
+                    soft_logits = args.teacher_model(images)[0].detach()
                     soft_label = F.softmax(soft_logits, dim=1)
+            # print('finish softlable %d' % hvd.rank())
 
             # clear gradients
             run_manager.optimizer.zero_grad()
@@ -139,9 +136,23 @@ def train_one_epoch(run_manager, args, epoch, warmup_epochs=0, warmup_lr=0):
                     key, '%.1f' % subset_mean(val, 0) if isinstance(val, list) else val
                 ) for key, val in subnet_settings.items()]) + ' || '
 
-                output = run_manager.net(images)
+                output,feature_matrix = run_manager.net(images)
+                # print('finish prefict %d' % hvd.rank())
+
+                feature_matrix = feature_matrix.reshape((feature_matrix.shape[0], -1))
+                # get this batch's batch_center
+                batch_center = run_manager.feature_center[labels]
+                # Normalize centermatrix batch_center
+                batch_center = nn.functional.normalize(batch_center, 2, -1)
+                # Update Feature Center
+                run_manager.feature_center[labels] += 0.05 * (feature_matrix.detach() - batch_center)
+                # loss_center = l2_loss(feature_matrix, batch_center)
+                distance = torch.pow(feature_matrix - batch_center, 2)
+                distance = torch.sum(distance, -1)
+                center_loss = torch.mean(distance)
+
                 if args.kd_ratio == 0:
-                    loss = run_manager.train_criterion(output, labels)
+                    loss = run_manager.train_criterion(output, labels) + center_loss
                     loss_type = 'ce'
                 else:
                     if args.kd_type == 'ce':
@@ -149,7 +160,7 @@ def train_one_epoch(run_manager, args, epoch, warmup_epochs=0, warmup_lr=0):
                     else:
                         kd_loss = F.mse_loss(output, soft_logits)
                     loss = args.kd_ratio * kd_loss + run_manager.train_criterion(output, labels)
-                    loss = loss * (2 / (args.kd_ratio + 1))
+                    loss = loss * (2 / (args.kd_ratio + 1)) + center_loss*2.0
                     loss_type = '%.1fkd-%s & ce' % (args.kd_ratio, args.kd_type)
 
                 # measure accuracy and record loss
@@ -157,9 +168,11 @@ def train_one_epoch(run_manager, args, epoch, warmup_epochs=0, warmup_lr=0):
                 loss_of_subnets.append(loss)
                 acc1_of_subnets.append(acc1[0])
                 acc5_of_subnets.append(acc5[0])
-
+                # print('finish calculate loss %d' % hvd.rank())
                 loss.backward()
+                # print('finish backwards %d' % hvd.rank())
             run_manager.optimizer.step()
+            # print('finish optimizer step %d' % hvd.rank())
 
             losses.update(list_mean(loss_of_subnets), images.size(0))
             top1.update(list_mean(acc1_of_subnets), images.size(0))

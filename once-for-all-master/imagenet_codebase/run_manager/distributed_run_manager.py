@@ -360,7 +360,7 @@ class DistributedRunManager:
         if net is None:
             net = self.net
         num_gpu = hvd.size()
-        n_images = 100
+        n_images = 50
         batch_size = (math.ceil(n_images / num_gpu) // 8 + 1) * 8
         # print(batch_size)
         # exit(0)
