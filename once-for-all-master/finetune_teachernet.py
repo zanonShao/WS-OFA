@@ -18,7 +18,7 @@ from elastic_nn.training.progressive_shrinking import load_models
 parser = argparse.ArgumentParser()
 
 args = parser.parse_args()
-args.path = 'exp/teacher_finetune'
+args.path = 'exp/teacher_finetune_所有960升维共用一个conv'
 args.dynamic_batch_size = 1
 args.n_epochs = 1200
 # args.base_lr = 3e-2

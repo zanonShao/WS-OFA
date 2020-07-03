@@ -42,6 +42,7 @@ class OFAMobileNetV3WS(OFAMobileNetV3):
         super(OFAMobileNetV3WS,self).__init__(n_classes, bn_param, dropout_rate, base_stage_width,
                 width_mult_list, ks_list, expand_ratio_list, depth_list)
 
+
         if len(self.final_expand_width) == 1:
             self.feature_mix_layer_M = nn.ModuleList([ConvLayer(
                 max(self.final_expand_width), max(self.last_channel), kernel_size=1, bias=False, use_bn=False, act_func='h_swish',
@@ -82,20 +83,8 @@ class OFAMobileNetV3WS(OFAMobileNetV3):
                 x = self.blocks[idx](x)
 
         x = self.final_expand_layer(x)
-        # if x.size()[0]>1:
-        #     x = x.mean(3, keepdim=True).mean(2, keepdim=True)
-        #     print(x)
-        #     print(x.mean())
-        #     exit(0)
-        # print(x.size())
         attention_maps =F.relu(self.attentions(x),inplace=True)
         feature_matrix =self.bap(x,attention_maps)*0.1
-        # if feature_matrix.size()[0]>1:
-        #     print(feature_matrix[:,1:2,:])
-        #     print(feature_matrix[:, 1:2, :].mean())
-        #     print(feature_matrix[:,30:31,:])
-        #     print(feature_matrix[:, 30:31, :].mean())
-        #     exit(0)
 
         B = attention_maps.size(0)
         for i in range(self.M):
@@ -188,6 +177,8 @@ class OFAMobileNetV3WS(OFAMobileNetV3):
             if 'classifier' in new_key:
                 model_dict.pop(new_key)
             else:
+                model_dict[new_key] = src_model_dict[key]
+                '''
                 if 'feature_mix_layer' in new_key:
                     #'feature_mix_layer_M.28.conv.weight', 'feature_mix_layer_M.29.conv.weight'
                     for i in range(self.M):
@@ -195,7 +186,7 @@ class OFAMobileNetV3WS(OFAMobileNetV3):
                     model_dict[new_key] = src_model_dict[key]
                 else:
                     model_dict[new_key] = src_model_dict[key]
-
+                '''
         self.load_state_dict(model_dict,strict=False)
 
 

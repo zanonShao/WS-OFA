@@ -31,8 +31,8 @@ args = parser.parse_args()
 if args.task == 'kernel':
     args.path = 'exp/normal2kernel'
     args.dynamic_batch_size = 1
-    args.n_epochs = 120
-    args.base_lr = 3e-2
+    args.n_epochs = 1200
+    args.base_lr = 6e-2
     args.warmup_epochs = 5
     args.warmup_lr = -1
     args.ks_list = '3,5,7'
@@ -82,7 +82,7 @@ args.manual_seed = 0
 
 args.lr_schedule_type = 'cosine'
 
-args.base_batch_size = 32
+args.base_batch_size = 18
 args.valid_size = None # split from train_dataset
 
 args.opt_type = 'sgd'
@@ -94,13 +94,13 @@ args.no_decay_keys = 'bn#bias'
 args.fp16_allreduce = False
 
 args.model_init = 'he_fout'
-args.validation_frequency = 1
+args.validation_frequency = 5
 args.print_frequency = 10
 
 args.n_worker = 8
 args.resize_scale = 0.08
 args.distort_color = 'tf'
-args.image_size = '224' #'128,160,192,224'
+args.image_size = '448' #'128,160,192,224'
 args.continuous_size = True
 args.not_sync_distributed_image_size = False
 
@@ -126,7 +126,7 @@ if __name__ == '__main__':
     torch.cuda.set_device(hvd.local_rank())
 
     args.teacher_path = download_url(
-        'https://hanlab.mit.edu/files/OnceForAll/ofa_checkpoints/ofa_D4_E6_K7',
+        '/NAS_REMOTE/shaozl/Fine-grained/once-for-all-master/.torch/ofa_checkpoints/ofa_ws_D4_E6_K7',
         model_dir='.torch/ofa_checkpoints/%d' % hvd.rank()
     )
 
@@ -204,7 +204,7 @@ if __name__ == '__main__':
     # training
     from elastic_nn.training.progressive_shrinking import validate, train
 
-    validate_func_dict = {'image_size_list': {224} if isinstance(args.image_size, int) else sorted({160, 224}),
+    validate_func_dict = {'image_size_list': {448} if isinstance(args.image_size, int) else sorted({160, 224}),
                           'width_mult_list': sorted({0, len(args.width_mult_list) - 1}),
                           'ks_list': sorted({min(args.ks_list), max(args.ks_list)}),
                           'expand_ratio_list': sorted({min(args.expand_list), max(args.expand_list)}),
@@ -212,14 +212,15 @@ if __name__ == '__main__':
     if args.task == 'kernel':
         validate_func_dict['ks_list'] = sorted(args.ks_list)
         if distributed_run_manager.start_epoch == 0:
-            model_path = download_url('https://hanlab.mit.edu/files/OnceForAll/ofa_checkpoints/ofa_D4_E6_K7',
+            model_path = download_url('/NAS_REMOTE/shaozl/Fine-grained/once-for-all-master/.torch/ofa_checkpoints/ofa_ws_D4_E6_K7',
                                       model_dir='.torch/ofa_checkpoints/%d' % hvd.rank())
             load_models(distributed_run_manager, distributed_run_manager.net, model_path=model_path)
-            distributed_run_manager.write_log('%.3f\t%.3f\t%.3f\t%s' %
-                                              validate(distributed_run_manager, **validate_func_dict), 'valid')
-            print('###############finish manager.validate#############')
+            print('Finishi init on %d'%hvd.rank())
+            # distributed_run_manager.write_log('%.3f\t%.3f\t%.3f\t%s' %
+            #                                   validate(distributed_run_manager, **validate_func_dict), 'valid')
         train(distributed_run_manager, args,
               lambda _run_manager, epoch, is_test: validate(_run_manager, epoch, is_test, **validate_func_dict))
+        exit(0)
     elif args.task == 'depth':
         from elastic_nn.training.progressive_shrinking import supporting_elastic_depth
         supporting_elastic_depth(train, distributed_run_manager, args, validate_func_dict)

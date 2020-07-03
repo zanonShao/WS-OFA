@@ -56,8 +56,8 @@ def set_running_statistics(model, data_loader, distributed=False):
             images = images.to(get_net_device(forward_model))
             forward_model(images)
         DynamicBatchNorm2d.SET_RUNNING_STATISTICS = False
-    import time
-    time.sleep(2)
+    # import time
+    # time.sleep(2)
     for name, m in model.named_modules():
         if name in bn_mean and bn_mean[name].count > 0:
             feature_dim = bn_mean[name].avg.size(0) #equal to channel
